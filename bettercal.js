@@ -5,9 +5,8 @@ var BetterCal = (function() {
         console.log(x);
     };
 
-    var setup = function(client_id, api_key, scopes) {
+    var setup = function(client_id, scopes) {
         this.client_id = client_id;
-        this.api_key = api_key;
         this.scopes = scopes;
         console.log("Setup complete.");
     }
@@ -70,66 +69,71 @@ var BetterCal = (function() {
         });
     };
 
+    BetterCalProxy.prototype.get_calendar = function(id, cb) {
+        if (cb == undefined) {
+            cb = logger;
+        }
+        this.cal_object.calendars.get({'calendarId':id}).execute(function(item) {
+            cb(new BCCalendarProxy(item));
+        });
+    };
+
+    BetterCalProxy.prototype.toString = function() {
+        return "[Better Cal Proxy: " + this.cal_object + "]";
+    };
+
+    BetterCalProxy.prototype.list = function(cb) {
+        consume_result(gapi.client.calendar.calendarList.list, {}, cb);
+    };
+
+    var consume_result = function(command, args, final_cb, accum) {
+        console.log("consume ping: " + new Date());
+
+        if (accum == undefined) {
+            accum = [];
+        }
+
+        command(args).execute(function(response) {
+            if (response['nextPageToken'] != undefined) {
+                args['pageToken'] = response['nextPageToken'];
+                accum = accum.concat(response['items']);
+                consume_result(command, args, final_cb, accum);
+            } else {
+                final_cb(response, accum.concat(response['items']));
+            }
+        });
+    };
+
     var BCCalendarProxy = function(calendar_obj) {
         this.calobj = calendar_obj;
     };
 
-    BCCalendarProxy.prototype.list = function(c, cb, more) {
-        if (more == undefined) {
-            more = {}
-        };
+    BCCalendarProxy.prototype.toString = function() {
+        return "[Calendar: " + this.calobj.summary + "]";
+    };
 
-        var this_list = this;
+    BCCalendarProxy.prototype.list = function(c, cb) {
+        if (typeof(c['timeMin']) != "string") {
+            c['timeMin'] = date(c['timeMin']);
+        }
+
+        if (typeof(c['timeMax']) != "string") {
+            c['timeMax'] = date(c['timeMax']);
+        }
+
         if (c['calendarId'] == undefined) {
             c['calendarId'] = this.calobj['id'];
         }
 
-        var items = [];
+        var calid = this.calobj['id'];
 
-        if (more['prev_list'] != undefined && more['consume']) {
-            items = more['prev_list'];
-        }
-
-        gapi.client.calendar.events.list(c).execute(function(response) {
-            var next_cb = null;
-
-            $.each(response['items'] || [], function(index, item) {
-                if (item['recurrence'] != undefined) {
-                    console.log(item['summary']);
-                } else {
-                    items.push(new BCEventProxy(item, this_list.calobj['id']));
-                }
-            });
-
-            if (response['nextPageToken'] != undefined) {
-                c['pageToken'] = response['nextPageToken'];
-                next_cb = function(callback2) {
-                    this_list.list(c, callback2);
-                }
+        consume_result(gapi.client.calendar.events.list, c, function(response, items) {
+            var new_items = [];
+            items.reverse();
+            for(var i=0; i < items.length; i++) {
+                new_items.push(new BCEventProxy(items[i], calid));
             }
-
-            if (more['consume'] && next_cb != null) {
-                more['prev_list'] = items;
-                this_list.list(c, cb, more);
-            } else {
-                var sync_token_fn = null;
-                if (response['nextSyncToken'] != undefined) {
-                    delete c['iCalUID'];
-                    delete c['orderBy'];
-                    delete c['privateExtendedProperty'];
-                    delete c['q'];
-                    delete c['sharedExtendedProperty'];
-                    delete c['timeMin'];
-                    delete c['timeMax'];
-                    delete c['updatedMin'];
-
-                    c['syncToken'] = response['nextSyncToken'];
-                    sync_token_fn = function(newcb, newmore) {
-                        this_list.list(c, newcb, newmore);
-                    };
-                }
-                cb(items, next_cb, response, sync_token_fn);
-            }
+            cb(response, new_items);
         });
     };
 
@@ -138,12 +142,21 @@ var BetterCal = (function() {
         this.cal_id = cal_id;
     };
 
+    BCEventProxy.prototype.is_on_date = function(s) {
+        if (this.event.start.dateTime.slice(0, 10) == s) {
+            return true;
+        } else {
+            return false;
+        }
+    };
+
     return {
         'init':init,
         'setup':setup,
         'check_auth':check_auth,
         'authorize':authorize,
         'zero_pad':_zero_pad,
-        'date':date
+        'date':date,
+        'BCEventProxy':BCEventProxy
     };
 })();
